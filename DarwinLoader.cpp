@@ -223,17 +223,22 @@ sigaction(signum, NULL, &old); { \
         // XXX: eventually this should become false: dylibs must have a filter
         bool load(!safe);
 
+#define CheckListItem(OBJ, CLS, OTHER_EXPR, ERR, ...) do {\
+    if(CFGetTypeID(OBJ) != CLS##GetTypeID() || OTHER_EXPR){\
+        MSLog(MSLogLevelError, "MS:Error: Unable to read %@.plist: "ERR": %@", dylib, ## __VA_ARGS__, OBJ);\
+        load = false;\
+        goto release;\
+    }\
+} while(0)
+
         if (meta != NULL) {
             if (CFDictionaryRef filter = reinterpret_cast<CFDictionaryRef>(CFDictionaryGetValue(meta, CFSTR("Filter")))) {
+                CheckListItem(filter, CFDictionary, false, "root item is not a dictionary");
                 load = true;
 
                 int value(0);
                 if (CFNumberRef flags = reinterpret_cast<CFNumberRef>(CFDictionaryGetValue(filter, CFSTR("Flags")))) {
-                    if (CFGetTypeID(flags) != CFNumberGetTypeID() || !CFNumberGetValue(flags, kCFNumberIntType, &value)) {
-                        MSLog(MSLogLevelError, "MS:Error: Unable to Read Flags: %@", flags);
-                        load = false;
-                        goto release;
-                    }
+                    CheckListItem(flags, CFNumber, !CFNumberGetValue(flags, kCFNumberIntType, &value), "Flags is not an integer");
                 }
 
                 #define MSFlagWhenSafe  (1 << 0)
@@ -250,11 +255,13 @@ sigaction(signum, NULL, &old); { \
                 }
 
                 if (CFArrayRef version = reinterpret_cast<CFArrayRef>(CFDictionaryGetValue(filter, CFSTR("CoreFoundationVersion")))) {
+                    CheckListItem(version, CFArray, false, "CoreFoundationVersion is not an array");
                     load = false;
 
                     if (CFIndex count = CFArrayGetCount(version)) {
                         if (count > 2) {
-                            MSLog(MSLogLevelError, "MS:Error: Invalid CoreFoundationVersion: %@", version);
+                            //force an error
+                            CheckListItem(version, CFArray, true, "CoreFoundationVersion has more than 2 elements");
                             goto release;
                         }
 
@@ -262,22 +269,14 @@ sigaction(signum, NULL, &old); { \
                         double value;
 
                         number = reinterpret_cast<CFNumberRef>(CFArrayGetValueAtIndex(version, 0));
-
-                        if (CFGetTypeID(number) != CFNumberGetTypeID() || !CFNumberGetValue(number, kCFNumberDoubleType, &value)) {
-                            MSLog(MSLogLevelError, "MS:Error: Unable to Read CoreFoundationVersion[0]: %@", number);
-                            goto release;
-                        }
+                        CheckListItem(number, CFNumber, !CFNumberGetValue(number, kCFNumberDoubleType, &value), "CoreFoundationVersion[0] is not a float");
 
                         if (value > kCFCoreFoundationVersionNumber)
                             goto release;
 
                         if (count != 1) {
                             number = reinterpret_cast<CFNumberRef>(CFArrayGetValueAtIndex(version, 1));
-
-                            if (CFGetTypeID(number) != CFNumberGetTypeID() || !CFNumberGetValue(number, kCFNumberDoubleType, &value)) {
-                                MSLog(MSLogLevelError, "MS:Error: Unable to Read CoreFoundationVersion[1]: %@", number);
-                                goto release;
-                            }
+                            CheckListItem(number, CFNumber, !CFNumberGetValue(number, kCFNumberDoubleType, &value), "CoreFoundationVersion[1] is not a float");
 
                             if (value <= kCFCoreFoundationVersionNumber)
                                 goto release;
@@ -289,7 +288,10 @@ sigaction(signum, NULL, &old); { \
 
                 bool any;
                 if (CFStringRef mode = reinterpret_cast<CFStringRef>(CFDictionaryGetValue(filter, CFSTR("Mode"))))
+                {
+                    CheckListItem(mode, CFString, false, "Mode is not a string");
                     any = CFEqual(mode, CFSTR("Any"));
+                }
                 else
                     any = false;
 
@@ -297,6 +299,7 @@ sigaction(signum, NULL, &old); { \
                     load = false;
 
                 if (CFArrayRef executables = reinterpret_cast<CFArrayRef>(CFDictionaryGetValue(filter, CFSTR("Executables")))) {
+                    CheckListItem(executables, CFArray, false, "Executables is not an array");
                     if (!any)
                         load = false;
 
@@ -304,6 +307,7 @@ sigaction(signum, NULL, &old); { \
 
                     for (CFIndex i(0), count(CFArrayGetCount(executables)); i != count; ++i) {
                         CFStringRef executable(reinterpret_cast<CFStringRef>(CFArrayGetValueAtIndex(executables, i)));
+                        CheckListItem(executable, CFString, false, "Executables[%d] is not a string", (int)i);
                         if (CFEqual(executable, name)) {
                             if (ForSaurik)
                                 MSLog(MSLogLevelNotice, "MS:Notice: Found: %@", name);
@@ -319,11 +323,13 @@ sigaction(signum, NULL, &old); { \
                 }
 
                 if (CFArrayRef bundles = reinterpret_cast<CFArrayRef>(CFDictionaryGetValue(filter, CFSTR("Bundles")))) {
+                    CheckListItem(bundles, CFArray, false, "Bundles is not an array");
                     if (!any)
                         load = false;
 
                     for (CFIndex i(0), count(CFArrayGetCount(bundles)); i != count; ++i) {
                         CFStringRef bundle(reinterpret_cast<CFStringRef>(CFArrayGetValueAtIndex(bundles, i)));
+                        CheckListItem(bundle, CFString, false, "Bundles[%d] is not a string", (int)i);
                         if (CFBundleGetBundleWithIdentifier(bundle) != NULL) {
                             if (ForSaurik)
                                 MSLog(MSLogLevelNotice, "MS:Notice: Found: %@", bundle);
@@ -337,12 +343,14 @@ sigaction(signum, NULL, &old); { \
                 }
 
                 if (CFArrayRef classes = reinterpret_cast<CFArrayRef>(CFDictionaryGetValue(filter, CFSTR("Classes")))) {
+                    CheckListItem(classes, CFArray, false, "Classes it not an array");
                     if (!any)
                         load = false;
 
                     if (NSClassFromString != NULL)
                         for (CFIndex i(0), count(CFArrayGetCount(classes)); i != count; ++i) {
                             CFStringRef _class(reinterpret_cast<CFStringRef>(CFArrayGetValueAtIndex(classes, i)));
+                            CheckListItem(_class, CFString, false, "Classes[%d] is not a string", (int)i);
                             if (NSClassFromString(_class) != NULL) {
                                 if (ForSaurik)
                                     MSLog(MSLogLevelNotice, "MS:Notice: Found: %@", _class);
